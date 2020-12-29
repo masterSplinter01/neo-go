@@ -13,7 +13,7 @@ func Opcode(base int64, opcodes ...opcode.Opcode) int64 {
 	return result * base
 }
 
-var coefficients = map[opcode.Opcode]int64{
+var coefficients = [256]int64{
 	opcode.PUSHINT8:     1 << 0,
 	opcode.PUSHINT16:    1 << 0,
 	opcode.PUSHINT32:    1 << 0,
