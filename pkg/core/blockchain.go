@@ -593,35 +593,94 @@ func (bc *Blockchain) GetStateRoot(height uint32) (*state.MPTRootState, error) {
 // This is the only way to change Blockchain state.
 func (bc *Blockchain) storeBlock(block *block.Block, txpool *mempool.Pool) error {
 	cache := dao.NewCached(bc.dao)
-	writeBuf := io.NewBufBinWriter()
 	appExecResults := make([]*state.AppExecResult, 0, 2+len(block.Transactions))
-	if err := cache.StoreAsBlock(block, writeBuf); err != nil {
-		return err
-	}
-	writeBuf.Reset()
 
-	if err := cache.StoreAsCurrentBlock(block, writeBuf); err != nil {
-		return err
+	kvcache := dao.NewCached(cache)
+	aerchan := make(chan *state.AppExecResult, 8)
+	aerdone := make(chan error)
+	blockdone := make(chan error)
+	var aerroutine = func() {
+		var writeBuf = io.NewBufBinWriter()
+		var err error
+		var appendBlock bool
+		for {
+			aer, ok := <-aerchan
+			if !ok {
+				break
+			}
+			if aer.Container == block.Hash() && appendBlock {
+				err = kvcache.AppendAppExecResult(aer, writeBuf)
+			} else {
+				err = kvcache.PutAppExecResult(aer, writeBuf)
+				if aer.Container == block.Hash() {
+					appendBlock = true
+				}
+			}
+			if err != nil {
+				err = fmt.Errorf("failed to store tx exec result: %w", err)
+				break
+			}
+			writeBuf.Reset()
+		}
+		if err != nil {
+			aerdone <- err
+		}
+		close(aerdone)
 	}
-	writeBuf.Reset()
+	var blockroutine = func() {
+		var writeBuf = io.NewBufBinWriter()
+		if err := kvcache.StoreAsBlock(block, writeBuf); err != nil {
+			blockdone <- err
+		}
+		writeBuf.Reset()
 
+		if err := kvcache.StoreAsCurrentBlock(block, writeBuf); err != nil {
+			blockdone <- err
+		}
+		writeBuf.Reset()
+
+		for _, tx := range block.Transactions {
+			if err := kvcache.StoreAsTransaction(tx, block.Index, writeBuf); err != nil {
+				blockdone <- err
+			}
+
+			writeBuf.Reset()
+			if bc.config.P2PSigExtensions {
+				for _, attr := range tx.GetAttributes(transaction.ConflictsT) {
+					hash := attr.Value.(*transaction.Conflicts).Hash
+					dummyTx := transaction.NewTrimmedTX(hash)
+					dummyTx.Version = transaction.DummyVersion
+					if err := kvcache.StoreAsTransaction(dummyTx, block.Index, writeBuf); err != nil {
+						blockdone <- fmt.Errorf("failed to store conflicting transaction %s for transaction %s: %w", hash.StringLE(), tx.Hash().StringLE(), err)
+					}
+					writeBuf.Reset()
+				}
+			}
+		}
+		if bc.config.RemoveUntraceableBlocks {
+			if block.Index > bc.config.MaxTraceableBlocks {
+				index := block.Index - bc.config.MaxTraceableBlocks // is at least 1
+				err := kvcache.DeleteBlock(bc.headerHashes[index], writeBuf)
+				if err != nil {
+					bc.log.Warn("error while removing old block",
+						zap.Uint32("index", index),
+						zap.Error(err))
+				}
+				writeBuf.Reset()
+			}
+		}
+		close(blockdone)
+	}
+	go aerroutine()
+	go blockroutine()
 	aer, err := bc.runPersist(bc.contracts.GetPersistScript(), block, cache, trigger.OnPersist)
 	if err != nil {
 		return fmt.Errorf("onPersist failed: %w", err)
 	}
 	appExecResults = append(appExecResults, aer)
-	err = cache.PutAppExecResult(aer, writeBuf)
-	if err != nil {
-		return fmt.Errorf("failed to store onPersist exec result: %w", err)
-	}
-	writeBuf.Reset()
+	aerchan <- aer
 
 	for _, tx := range block.Transactions {
-		if err := cache.StoreAsTransaction(tx, block.Index, writeBuf); err != nil {
-			return err
-		}
-		writeBuf.Reset()
-
 		systemInterop := bc.newInteropContext(trigger.Application, cache, block, tx)
 		v := systemInterop.SpawnVM()
 		v.LoadScriptWithFlags(tx.Script, smartcontract.All)
@@ -657,23 +716,7 @@ func (bc *Blockchain) storeBlock(block *block.Block, txpool *mempool.Pool) error
 			},
 		}
 		appExecResults = append(appExecResults, aer)
-		err = cache.PutAppExecResult(aer, writeBuf)
-		if err != nil {
-			return fmt.Errorf("failed to store tx exec result: %w", err)
-		}
-		writeBuf.Reset()
-
-		if bc.config.P2PSigExtensions {
-			for _, attr := range tx.GetAttributes(transaction.ConflictsT) {
-				hash := attr.Value.(*transaction.Conflicts).Hash
-				dummyTx := transaction.NewTrimmedTX(hash)
-				dummyTx.Version = transaction.DummyVersion
-				if err = cache.StoreAsTransaction(dummyTx, block.Index, writeBuf); err != nil {
-					return fmt.Errorf("failed to store conflicting transaction %s for transaction %s: %w", hash.StringLE(), tx.Hash().StringLE(), err)
-				}
-				writeBuf.Reset()
-			}
-		}
+		aerchan <- aer
 	}
 
 	aer, err = bc.runPersist(bc.contracts.GetPostPersistScript(), block, cache, trigger.PostPersist)
@@ -681,12 +724,8 @@ func (bc *Blockchain) storeBlock(block *block.Block, txpool *mempool.Pool) error
 		return fmt.Errorf("postPersist failed: %w", err)
 	}
 	appExecResults = append(appExecResults, aer)
-	err = cache.AppendAppExecResult(aer, writeBuf)
-	if err != nil {
-		return fmt.Errorf("failed to store postPersist exec result: %w", err)
-	}
-	writeBuf.Reset()
-
+	aerchan <- aer
+	close(aerchan)
 	d := cache.DAO.(*dao.Simple)
 	if err := d.UpdateMPT(); err != nil {
 		return fmt.Errorf("error while trying to apply MPT changes: %w", err)
@@ -715,17 +754,13 @@ func (bc *Blockchain) storeBlock(block *block.Block, txpool *mempool.Pool) error
 	if bc.config.SaveStorageBatch {
 		bc.lastBatch = cache.DAO.GetBatch()
 	}
-	if bc.config.RemoveUntraceableBlocks {
-		if block.Index > bc.config.MaxTraceableBlocks {
-			index := block.Index - bc.config.MaxTraceableBlocks // is at least 1
-			err := cache.DeleteBlock(bc.headerHashes[index], writeBuf)
-			if err != nil {
-				bc.log.Warn("error while removing old block",
-					zap.Uint32("index", index),
-					zap.Error(err))
-			}
-			writeBuf.Reset()
-		}
+
+	<-aerdone
+	<-blockdone
+
+	_, err = kvcache.Persist()
+	if err != nil {
+		return err
 	}
 
 	bc.lock.Lock()
