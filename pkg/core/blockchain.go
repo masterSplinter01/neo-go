@@ -595,39 +595,11 @@ func (bc *Blockchain) storeBlock(block *block.Block, txpool *mempool.Pool) error
 	cache := dao.NewCached(bc.dao)
 	appExecResults := make([]*state.AppExecResult, 0, 2+len(block.Transactions))
 
-	kvcache := dao.NewCached(cache)
 	aerchan := make(chan *state.AppExecResult, 8)
 	aerdone := make(chan error)
 	blockdone := make(chan error)
-	var aerroutine = func() {
-		var writeBuf = io.NewBufBinWriter()
-		var err error
-		var appendBlock bool
-		for {
-			aer, ok := <-aerchan
-			if !ok {
-				break
-			}
-			if aer.Container == block.Hash() && appendBlock {
-				err = kvcache.AppendAppExecResult(aer, writeBuf)
-			} else {
-				err = kvcache.PutAppExecResult(aer, writeBuf)
-				if aer.Container == block.Hash() {
-					appendBlock = true
-				}
-			}
-			if err != nil {
-				err = fmt.Errorf("failed to store tx exec result: %w", err)
-				break
-			}
-			writeBuf.Reset()
-		}
-		if err != nil {
-			aerdone <- err
-		}
-		close(aerdone)
-	}
-	var blockroutine = func() {
+	go func() {
+		kvcache := dao.NewCached(cache)
 		var writeBuf = io.NewBufBinWriter()
 		if err := kvcache.StoreAsBlock(block, writeBuf); err != nil {
 			blockdone <- err
@@ -669,10 +641,45 @@ func (bc *Blockchain) storeBlock(block *block.Block, txpool *mempool.Pool) error
 				writeBuf.Reset()
 			}
 		}
+		_, err := kvcache.Persist()
+		if err != nil {
+			blockdone <- err
+		}
 		close(blockdone)
-	}
-	go aerroutine()
-	go blockroutine()
+	}()
+	go func() {
+		kvcache := dao.NewCached(cache)
+		var writeBuf = io.NewBufBinWriter()
+		var err error
+		var appendBlock bool
+		for {
+			aer, ok := <-aerchan
+			if !ok {
+				break
+			}
+			if aer.Container == block.Hash() && appendBlock {
+				err = kvcache.AppendAppExecResult(aer, writeBuf)
+			} else {
+				err = kvcache.PutAppExecResult(aer, writeBuf)
+				if aer.Container == block.Hash() {
+					appendBlock = true
+				}
+			}
+			if err != nil {
+				err = fmt.Errorf("failed to store tx exec result: %w", err)
+				break
+			}
+			writeBuf.Reset()
+		}
+		if err != nil {
+			aerdone <- err
+		}
+		_, err = kvcache.Persist()
+		if err != nil {
+			aerdone <- err
+		}
+		close(aerdone)
+	}()
 	aer, err := bc.runPersist(bc.contracts.GetPersistScript(), block, cache, trigger.OnPersist)
 	if err != nil {
 		return fmt.Errorf("onPersist failed: %w", err)
@@ -757,11 +764,6 @@ func (bc *Blockchain) storeBlock(block *block.Block, txpool *mempool.Pool) error
 
 	<-aerdone
 	<-blockdone
-
-	_, err = kvcache.Persist()
-	if err != nil {
-		return err
-	}
 
 	bc.lock.Lock()
 	_, err = cache.Persist()
