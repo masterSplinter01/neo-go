@@ -8,11 +8,13 @@ import (
 	"io/ioutil"
 	"math/big"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/nspcc-dev/neo-go/internal/testchain"
 	"github.com/nspcc-dev/neo-go/internal/testserdes"
+	"github.com/nspcc-dev/neo-go/pkg/compiler"
 	"github.com/nspcc-dev/neo-go/pkg/config"
 	"github.com/nspcc-dev/neo-go/pkg/core/block"
 	"github.com/nspcc-dev/neo-go/pkg/core/blockchainer"
@@ -27,6 +29,7 @@ import (
 	"github.com/nspcc-dev/neo-go/pkg/io"
 	"github.com/nspcc-dev/neo-go/pkg/smartcontract"
 	"github.com/nspcc-dev/neo-go/pkg/smartcontract/callflag"
+	"github.com/nspcc-dev/neo-go/pkg/smartcontract/nef"
 	"github.com/nspcc-dev/neo-go/pkg/smartcontract/trigger"
 	"github.com/nspcc-dev/neo-go/pkg/util"
 	"github.com/nspcc-dev/neo-go/pkg/vm"
@@ -146,6 +149,73 @@ func (bc *Blockchain) genBlocks(n int) ([]*block.Block, error) {
 		lastHash = blocks[i].Hash()
 	}
 	return blocks, nil
+}
+
+func TestCompileUpdate(t *testing.T) {
+	src := `package foo
+import "github.com/nspcc-dev/neo-go/pkg/interop/util"
+import "github.com/nspcc-dev/neo-go/pkg/interop/storage"
+import "github.com/nspcc-dev/neo-go/pkg/interop/runtime"
+import "github.com/nspcc-dev/neo-go/pkg/interop/contract"
+import "github.com/nspcc-dev/neo-go/pkg/interop"
+const mgmtKey = "mgmt"
+
+var (
+	ctx storage.Context
+
+	owner = util.FromAddress("NTrezR3C4X8aMLVg7vozt5wguyNfFhwuFx")
+)
+
+func init() {
+	ctx = storage.GetContext()
+}
+
+func _deploy(_ interface{}, isUpdate bool) {
+	if isUpdate {
+		return
+	}
+
+	sh := runtime.GetCallingScriptHash()
+	storage.Put(ctx, mgmtKey, sh)
+}
+
+func Migrate(script []byte, manifest []byte) bool {
+	if !runtime.CheckWitness(owner) {
+		runtime.Log("Invalid owner to update contract.")
+		return false
+	}
+
+	runtime.Log("Valid owner to update contract.")
+	mgmt := storage.Get(ctx, mgmtKey).(interop.Hash160)
+	contract.Call(mgmt, "update", contract.All, script, manifest)
+	runtime.Log("Contract updated.")
+	return true
+}
+`
+	b, di, err := compiler.CompileWithDebugInfo("foo", strings.NewReader(src))
+	require.NoError(t, err)
+	m, err := di.ConvertToManifest(&compiler.Options{})
+	require.NoError(t, err)
+	nf, err := nef.NewFile(b)
+	require.NoError(t, err)
+	nf.CalculateChecksum()
+
+	rawManifest, _ := json.Marshal(m)
+	rawNef, _ := nf.Bytes()
+	//spew.Dump(rawManifest, rawNef)
+
+	bc := newTestChain(t)
+	defer bc.Close()
+
+	aer, err := invokeContractMethod(bc, 10000000000, bc.contracts.Management.Hash, "deploy",
+		rawNef, rawManifest)
+	require.NoError(t, err)
+	require.Equal(t, aer.VMState, vm.HaltState)
+
+	h := state.CreateContractHash(testchain.MultisigScriptHash(), nf.Checksum, m.Name)
+	aer, err = invokeContractMethod(bc, 100000000, h, "migrate", rawNef, rawManifest)
+	require.NoError(t, err)
+	require.Equal(t, aer.VMState, vm.HaltState)
 }
 
 func getDecodedBlock(t *testing.T, i int) *block.Block {

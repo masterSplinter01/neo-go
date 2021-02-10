@@ -240,6 +240,7 @@ func (m *Management) deployWithData(ic *interop.Context, args []stackitem.Item) 
 	if err != nil {
 		panic(err)
 	}
+	fmt.Println(newcontract.Hash.StringBE())
 	m.callDeploy(ic, newcontract, args[2], false)
 	m.emitNotification(ic, contractDeployNotificationName, newcontract.Hash)
 	return contractToStack(newcontract)

@@ -3,8 +3,10 @@ package manifest
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 
+	"github.com/davecgh/go-spew/spew"
 	"github.com/nspcc-dev/neo-go/pkg/io"
 	"github.com/nspcc-dev/neo-go/pkg/util"
 	"github.com/nspcc-dev/neo-go/pkg/vm/stackitem"
@@ -136,8 +138,11 @@ func (m *Manifest) EncodeBinary(w *io.BinWriter) {
 func (m *Manifest) DecodeBinary(r *io.BinReader) {
 	data := r.ReadVarBytes(MaxManifestSize)
 	if r.Err != nil {
+		fmt.Println("err", r.Err)
 		return
 	} else if err := json.Unmarshal(data, m); err != nil {
+		fmt.Println("error on json unmarshal")
+		spew.Dump(data)
 		r.Err = err
 	}
 }

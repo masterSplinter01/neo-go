@@ -6,6 +6,7 @@ require (
 	github.com/abiosoft/readline v0.0.0-20180607040430-155bce2042db
 	github.com/alicebob/miniredis v2.5.0+incompatible
 	github.com/btcsuite/btcd v0.20.1-beta
+	github.com/davecgh/go-spew v1.1.1
 	github.com/dgraph-io/badger/v2 v2.0.3
 	github.com/frankban/quicktest v1.10.0 // indirect
 	github.com/go-redis/redis v6.10.2+incompatible
