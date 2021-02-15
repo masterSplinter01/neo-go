@@ -25,8 +25,6 @@ var syscalls = map[string]map[string]string{
 		"ECDSASecp256k1CheckMultisig": interopnames.NeoCryptoCheckMultisigWithECDsaSecp256k1,
 		"ECDsaSecp256r1Verify":        interopnames.NeoCryptoVerifyWithECDsaSecp256r1,
 		"ECDSASecp256r1CheckMultisig": interopnames.NeoCryptoCheckMultisigWithECDsaSecp256r1,
-		"RIPEMD160":                   interopnames.NeoCryptoRIPEMD160,
-		"SHA256":                      interopnames.NeoCryptoSHA256,
 	},
 	"iterator": {
 		"Create": interopnames.SystemIteratorCreate,
