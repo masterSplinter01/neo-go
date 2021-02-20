@@ -657,6 +657,8 @@ func (s *Server) handleMempoolCmd(p Peer) error {
 // handleInvCmd processes the received inventory.
 func (s *Server) handleGetDataCmd(p Peer, inv *payload.Inventory) error {
 	var notFound []util.Uint256
+	var txs []*transaction.Transaction
+	var size int
 	for _, hash := range inv.Hashes {
 		var msg *Message
 
@@ -664,7 +666,12 @@ func (s *Server) handleGetDataCmd(p Peer, inv *payload.Inventory) error {
 		case payload.TXType:
 			tx, _, err := s.chain.GetTransaction(hash)
 			if err == nil {
-				msg = NewMessage(CMDTX, tx)
+				_ = size
+				txs = append(txs, tx)
+				if len(txs) == 4 {
+					msg = NewMessage(CMDTxBatch, &payload.Transactions{Values: txs})
+					txs = txs[:0]
+				}
 			} else {
 				notFound = append(notFound, hash)
 			}
@@ -698,6 +705,12 @@ func (s *Server) handleGetDataCmd(p Peer, inv *payload.Inventory) error {
 			if err != nil {
 				return err
 			}
+		}
+	}
+	if len(txs) != 0 {
+		msg := NewMessage(CMDTxBatch, &payload.Transactions{Values: txs})
+		if err := p.EnqueueP2PMessage(msg); err != nil {
+			return err
 		}
 	}
 	if len(notFound) != 0 {
@@ -819,12 +832,14 @@ func (s *Server) handleExtensibleCmd(e *payload.Extensible) error {
 
 // handleTxCmd processes received transaction.
 // It never returns an error.
-func (s *Server) handleTxCmd(tx *transaction.Transaction) error {
+func (s *Server) handleTxCmd(txs ...*transaction.Transaction) error {
 	// It's OK for it to fail for various reasons like tx already existing
 	// in the pool.
-	if s.verifyAndPoolTX(tx) == nil {
-		s.consensus.OnTransaction(tx)
-		s.broadcastTX(tx, nil)
+	for _, tx := range txs {
+		if s.verifyAndPoolTX(tx) == nil {
+			s.consensus.OnTransaction(tx)
+			s.broadcastTX(tx, nil)
+		}
 	}
 	return nil
 }
@@ -995,6 +1010,10 @@ func (s *Server) handleMessage(peer Peer, msg *Message) error {
 		case CMDTX:
 			tx := msg.Payload.(*transaction.Transaction)
 			return s.handleTxCmd(tx)
+		case CMDTxBatch:
+			txs := msg.Payload.(*payload.Transactions)
+			//s.log.Info("received tx batch", zap.Int("count", len(txs.Values)))
+			return s.handleTxCmd(txs.Values...)
 		case CMDP2PNotaryRequest:
 			r := msg.Payload.(*payload.P2PNotaryRequest)
 			return s.handleP2PNotaryRequestCmd(r)
