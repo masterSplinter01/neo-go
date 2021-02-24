@@ -18,6 +18,7 @@ import (
 	"github.com/nspcc-dev/neo-go/pkg/core/block"
 	"github.com/nspcc-dev/neo-go/pkg/core/interop"
 	"github.com/nspcc-dev/neo-go/pkg/core/transaction"
+	"github.com/nspcc-dev/neo-go/pkg/io"
 	"github.com/nspcc-dev/neo-go/pkg/network/capability"
 	"github.com/nspcc-dev/neo-go/pkg/network/payload"
 	"github.com/nspcc-dev/neo-go/pkg/util"
@@ -536,6 +537,25 @@ func TestGetData(t *testing.T) {
 			s.testHandleGetData(t, payload.TXType, hs, notFound, &payload.Transactions{
 				Network: netmode.UnitTestNet,
 				Values:  []*transaction.Transaction{tx1, tx2},
+			})
+		})
+		t.Run("big", func(t *testing.T) {
+			bigAttr := transaction.Attribute{
+				Type:  transaction.ReservedUpperBound,
+				Value: &transaction.Reserved{Value: make([]byte, io.MaxArraySize)},
+			}
+			tx1 := newDummyTx(bigAttr)
+			tx2 := newDummyTx(bigAttr)
+			hs := []util.Uint256{random.Uint256(), tx1.Hash(), tx2.Hash()}
+			s.chain.(*fakechain.FakeChain).PutTx(tx1)
+			s.chain.(*fakechain.FakeChain).PutTx(tx2)
+			notFound := []util.Uint256{hs[0]}
+			s.testHandleGetData(t, payload.TXType, hs, notFound, &payload.Transactions{
+				Network: netmode.UnitTestNet,
+				Values:  []*transaction.Transaction{tx1},
+			}, &payload.Transactions{
+				Network: netmode.UnitTestNet,
+				Values:  []*transaction.Transaction{tx2},
 			})
 		})
 	})
