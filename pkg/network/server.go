@@ -17,9 +17,13 @@ import (
 	"github.com/nspcc-dev/neo-go/pkg/core/blockchainer"
 	"github.com/nspcc-dev/neo-go/pkg/core/mempool"
 	"github.com/nspcc-dev/neo-go/pkg/core/mempoolevent"
+	"github.com/nspcc-dev/neo-go/pkg/core/mpt"
+	srcore "github.com/nspcc-dev/neo-go/pkg/core/stateroot"
 	"github.com/nspcc-dev/neo-go/pkg/core/transaction"
+	"github.com/nspcc-dev/neo-go/pkg/io"
 	"github.com/nspcc-dev/neo-go/pkg/network/capability"
 	"github.com/nspcc-dev/neo-go/pkg/network/extpool"
+	"github.com/nspcc-dev/neo-go/pkg/network/mptpool"
 	"github.com/nspcc-dev/neo-go/pkg/network/payload"
 	"github.com/nspcc-dev/neo-go/pkg/services/notary"
 	"github.com/nspcc-dev/neo-go/pkg/services/oracle"
@@ -70,6 +74,7 @@ type (
 		consensus         consensus.Service
 		notaryRequestPool *mempool.Pool
 		extensiblePool    *extpool.Pool
+		mptPool           *mptpool.Pool // TODO: add to StateModule instead?
 		notaryFeer        NotaryFeer
 		notaryModule      *notary.Notary
 
@@ -177,6 +182,15 @@ func newServerFromConstructors(config ServerConfig, chain blockchainer.Blockchai
 
 	if config.StateRootCfg.Enabled && chain.GetConfig().StateRootInHeader {
 		return nil, errors.New("`StateRootInHeader` should be disabled when state service is enabled")
+	}
+	if chain.GetConfig().P2PStateExchangeExtensions {
+		if !chain.GetConfig().StateRootInHeader {
+			return nil, errors.New("`StateRootInHeader` should be enabled when state exchange extensions are enabled")
+		}
+		s.mptPool = mptpool.New()
+	}
+	if chain.GetConfig().P2PStateExchangeExtensions && !chain.GetConfig().StateRootInHeader {
+		return nil, errors.New("`StateRootInHeader` should be enabled when state exchange extensions are enabled")
 	}
 
 	sr, err := stateroot.New(config.StateRootCfg, s.log, chain, s.handleNewPayload)
@@ -757,6 +771,106 @@ func (s *Server) handleGetDataCmd(p Peer, inv *payload.Inventory) error {
 	return nil
 }
 
+// handleGetMPTDataCmd processes the received MPT inventory.
+func (s *Server) handleGetMPTDataCmd(p Peer, inv *payload.MPTInventory) error {
+	if !s.chain.GetConfig().P2PStateExchangeExtensions {
+		return errors.New("GetMPTDataCMD was received, but P2PStateExchangeExtensions are disabled")
+	}
+	resp := payload.MPTData{}
+	size := payload.MaxSize - 8 // max(io.GetVarSize(len(nodes)))
+	for _, h := range inv.Hashes {
+		if size <= 2 { // at least 1 byte for len(nodeBytes) and 1 byte for node type
+			break
+		}
+		err := s.chain.GetStateModule().Traverse(h,
+			func(node []byte) {
+				resp.Nodes = append(resp.Nodes, node)
+				l := len(node)
+				size -= l + io.GetVarSize(l)
+			}, func(node []byte) bool {
+				l := len(node)
+				return l+io.GetVarSize(l) > size
+			})
+		if err != nil {
+			return fmt.Errorf("failed to traverse MPT starting from %s: %w", h.StringBE(), err)
+		}
+	}
+	if len(resp.Nodes) > 0 {
+		msg := NewMessage(CMDMPTData, &resp)
+		return p.EnqueueP2PMessage(msg)
+	}
+	return nil
+}
+
+// handleMPTDataCmd processes the received MPT data.
+func (s *Server) handleMPTDataCmd(p Peer, data *payload.MPTData) error {
+	if !s.chain.GetConfig().P2PStateExchangeExtensions {
+		return errors.New("MPTDataCMD was received, but P2PStateExchangeExtensions are disabled")
+	}
+	toBeRequested := make(map[util.Uint256]*mptpool.Item)
+	received := make(map[util.Uint256]bool)
+	for _, nBytes := range data.Nodes {
+		var n mpt.NodeObject
+		r := io.NewBinReaderFromBuf(nBytes)
+		n.DecodeBinary(r)
+		if r.Err != nil {
+			return fmt.Errorf("failed to decode MPT node: %w", r.Err)
+		}
+		if n.Type() == mpt.HashT {
+			return errors.New("HashNode received")
+		}
+		itm, ok := s.mptPool.TryGet(n.Hash())
+		if !ok {
+			if itm, ok = toBeRequested[n.Hash()]; !ok {
+				continue
+			}
+		}
+		if _, ok = received[n.Hash()]; ok {
+			continue
+		}
+
+		err := s.chain.GetStateModule().RestoreMPTNode(itm.Path, n.Node)
+		if err != nil {
+			return fmt.Errorf("failed to add MPT node: %w", err)
+		}
+		received[n.Hash()] = true
+		if _, ok := toBeRequested[n.Hash()]; ok {
+			delete(toBeRequested, n.Hash())
+		}
+
+		childrenPaths := mpt.GetChildrenPaths(itm.Path, n.Node)
+		for h, p := range childrenPaths {
+			toBeRequested[h] = &mptpool.Item{Path: p}
+		}
+	}
+	s.mptPool.Update(received, toBeRequested)
+	if len(toBeRequested) != 0 {
+		_ = s.requestMPTNodes(p, toBeRequested) // TODO: add requests retransmission to the pool
+	} else if s.mptPool.Count() == 0 {
+		// there's no Nodes we need to fetch, thus sync process considered to be ended
+		s.chain.GetStateModule().Collapse(srcore.CollapseDepth)
+	}
+	return nil
+}
+
+// requestMPTNodes requests specified MPT nodes from the peer.
+func (s *Server) requestMPTNodes(p Peer, itms map[util.Uint256]*mptpool.Item) error {
+	hashes := make([]util.Uint256, 0, payload.MaxMPTHashesCount)
+	for h := range itms {
+		hashes = append(hashes, h)
+		if len(hashes) == payload.MaxMPTHashesCount || len(hashes) == len(itms) {
+			pl := payload.NewMPTInventory(hashes)
+			msg := NewMessage(CMDGetMPTData, pl)
+			err := p.EnqueueP2PMessage(msg)
+			if err != nil {
+				return err
+			}
+			hashes = hashes[:0]
+		}
+	}
+	return nil
+}
+
 // handleGetBlocksCmd processes the getblocks request.
 func (s *Server) handleGetBlocksCmd(p Peer, gb *payload.GetBlocks) error {
 	count := gb.Count
@@ -1031,6 +1145,12 @@ func (s *Server) handleMessage(peer Peer, msg *Message) error {
 		case CMDGetData:
 			inv := msg.Payload.(*payload.Inventory)
 			return s.handleGetDataCmd(peer, inv)
+		case CMDGetMPTData:
+			inv := msg.Payload.(*payload.MPTInventory)
+			return s.handleGetMPTDataCmd(peer, inv)
+		case CMDMPTData:
+			inv := msg.Payload.(*payload.MPTData)
+			return s.handleMPTDataCmd(peer, inv)
 		case CMDGetHeaders:
 			gh := msg.Payload.(*payload.GetBlockByIndex)
 			return s.handleGetHeadersCmd(peer, gh)

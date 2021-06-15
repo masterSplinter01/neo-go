@@ -17,6 +17,10 @@ import (
 	"go.uber.org/zap"
 )
 
+// CollapseDepth is a good and roughly estimated value of MPT collapse depth to fit
+// in-memory MPT into 1M of memory.
+const CollapseDepth = 10
+
 type (
 	// Module represents module for local processing of state roots.
 	Module struct {
@@ -159,4 +163,31 @@ func (s *Module) verifyWitness(r *state.MPTRoot) error {
 	h := s.getKeyCacheForHeight(r.Index).validatorsHash
 	s.mtx.Unlock()
 	return s.bc.VerifyWitness(h, r, &r.Witness[0], maxVerificationGAS)
+}
+
+// Traverse traverses local MPT nodes starting from the specified root down to its
+// children calling f for each serialised node until stop condition is satisfied.
+func (s *Module) Traverse(root util.Uint256, f func(nodeBytes []byte), stop func(node []byte) bool) error {
+	tr := mpt.NewTrie(mpt.NewHashNode(root), false, storage.NewMemCachedStore(s.Store))
+	return tr.Traverse(f, stop)
+}
+
+// RestoreMPTNode tries to replace HashNode specified by the path to its "unhashed"
+// counterpart. An error is returned if the path doesn't point to a missing HashNode
+// or provided counterpart has invalid hash.
+func (s *Module) RestoreMPTNode(path []byte, node mpt.Node) error {
+	err := s.mpt.RestoreHashNode(path, node)
+	if err != nil {
+		return err
+	}
+	// TODO: either 1) put node into storage right now
+	// or 2) use modified `Flush` after all nodes are processed
+	// currently option 1) is implemented
+	_ = s.Store.Put(append([]byte{byte(storage.DataMPT)}, node.Hash().BytesBE()...), node.Bytes())
+	return err
+}
+
+// Collapse collapses local MPT.
+func (s *Module) Collapse(depth int) {
+	s.mpt.Collapse(depth)
 }
