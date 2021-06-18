@@ -56,7 +56,7 @@ func (c *Client) GetDesignatedByRole(role noderoles.Role, index uint32) (keys.Pu
 	if err != nil {
 		return nil, err
 	}
-	err = getInvocationError(result)
+	err = GetInvocationError(result)
 	if err != nil {
 		return nil, fmt.Errorf("`getDesignatedByRole`: %w", err)
 	}
@@ -81,7 +81,7 @@ func (c *Client) NNSResolve(nnsHash util.Uint160, name string, typ nns.RecordTyp
 	if err != nil {
 		return "", err
 	}
-	err = getInvocationError(result)
+	err = GetInvocationError(result)
 	if err != nil {
 		return "", fmt.Errorf("`resolve`: %w", err)
 	}
@@ -99,9 +99,9 @@ func (c *Client) NNSIsAvailable(nnsHash util.Uint160, name string) (bool, error)
 	if err != nil {
 		return false, err
 	}
-	err = getInvocationError(result)
+	err = GetInvocationError(result)
 	if err != nil {
 		return false, fmt.Errorf("`isAvailable`: %w", err)
 	}
-	return topBoolFromStack(result.Stack)
+	return TopBoolFromStack(result.Stack)
 }

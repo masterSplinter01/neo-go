@@ -168,6 +168,27 @@ func NewCommands() []cli.Command {
 				Flags:  deployFlags,
 			},
 			{
+				Name:        "generate-client",
+				Usage:       "generate Go wrapper to communicate with smartcontract",
+				UsageText:   "neo-go contract generate-client --manifest manifest.json --out file.go",
+				Description: ``,
+				Action:      contractGenerateWrapper,
+				Flags: []cli.Flag{
+					cli.StringFlag{
+						Name:  "package, p",
+						Usage: "Use package for generated code",
+					},
+					cli.StringFlag{
+						Name:  "manifest, m",
+						Usage: "Read contract manifest (*.manifest.json) file",
+					},
+					cli.StringFlag{
+						Name:  "out, o",
+						Usage: "Output of the compiled contract",
+					},
+				},
+			},
+			{
 				Name:      "invokefunction",
 				Usage:     "invoke deployed contract on the blockchain",
 				UsageText: "neo-go contract invokefunction -r endpoint -w wallet [-a address] [-g gas] [--out file] [--force] scripthash [method] [arguments...] [--] [signers...]",

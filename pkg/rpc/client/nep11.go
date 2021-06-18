@@ -96,7 +96,7 @@ func (c *Client) NEP11TokensOf(tokenHash util.Uint160, owner util.Uint160) ([]st
 	if err != nil {
 		return nil, err
 	}
-	err = getInvocationError(result)
+	err = GetInvocationError(result)
 	if err != nil {
 		return nil, err
 	}
@@ -126,7 +126,7 @@ func (c *Client) NEP11NDOwnerOf(tokenHash util.Uint160, tokenID string) (util.Ui
 	if err != nil {
 		return util.Uint160{}, err
 	}
-	err = getInvocationError(result)
+	err = GetInvocationError(result)
 	if err != nil {
 		return util.Uint160{}, err
 	}
@@ -176,7 +176,7 @@ func (c *Client) NEP11DOwnerOf(tokenHash util.Uint160, tokenID string) ([]util.U
 	if err != nil {
 		return nil, err
 	}
-	err = getInvocationError(result)
+	err = GetInvocationError(result)
 	if err != nil {
 		return nil, err
 	}
@@ -206,7 +206,7 @@ func (c *Client) NEP11Properties(tokenHash util.Uint160, tokenID string) (*stack
 	if err != nil {
 		return nil, err
 	}
-	err = getInvocationError(result)
+	err = GetInvocationError(result)
 	if err != nil {
 		return nil, err
 	}
@@ -220,7 +220,7 @@ func (c *Client) NEP11Tokens(tokenHash util.Uint160) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	err = getInvocationError(result)
+	err = GetInvocationError(result)
 	if err != nil {
 		return nil, err
 	}

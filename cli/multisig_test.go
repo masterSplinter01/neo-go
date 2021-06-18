@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/hex"
+	"fmt"
 	"math/big"
 	"os"
 	"path"
@@ -18,6 +19,9 @@ import (
 // 1. Transfer funds to a created multisig address.
 // 2. Transfer from multisig to another account.
 func TestSignMultisigTx(t *testing.T) {
+	s := "%#v "
+	fmt.Printf(s+s+s, interface{}(nil), "xxx", true)
+	return
 	e := newExecutor(t, true)
 
 	privs, pubs := generateKeys(t, 3)

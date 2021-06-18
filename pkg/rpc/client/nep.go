@@ -14,12 +14,12 @@ func (c *Client) nepDecimals(tokenHash util.Uint160) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	err = getInvocationError(result)
+	err = GetInvocationError(result)
 	if err != nil {
 		return 0, err
 	}
 
-	return topIntFromStack(result.Stack)
+	return TopIntFromStack(result.Stack)
 }
 
 // nepSymbol invokes `symbol` NEP* method on a specified contract.
@@ -28,7 +28,7 @@ func (c *Client) nepSymbol(tokenHash util.Uint160) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	err = getInvocationError(result)
+	err = GetInvocationError(result)
 	if err != nil {
 		return "", err
 	}
@@ -42,12 +42,12 @@ func (c *Client) nepTotalSupply(tokenHash util.Uint160) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	err = getInvocationError(result)
+	err = GetInvocationError(result)
 	if err != nil {
 		return 0, err
 	}
 
-	return topIntFromStack(result.Stack)
+	return TopIntFromStack(result.Stack)
 }
 
 // nepBalanceOf invokes `balanceOf` NEP* method on a specified contract.
@@ -66,12 +66,12 @@ func (c *Client) nepBalanceOf(tokenHash, acc util.Uint160, tokenID *string) (int
 	if err != nil {
 		return 0, err
 	}
-	err = getInvocationError(result)
+	err = GetInvocationError(result)
 	if err != nil {
 		return 0, err
 	}
 
-	return topIntFromStack(result.Stack)
+	return TopIntFromStack(result.Stack)
 }
 
 // nepTokenInfo returns full NEP* token info.

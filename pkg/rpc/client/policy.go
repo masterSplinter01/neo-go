@@ -54,11 +54,11 @@ func (c *Client) invokeNativeGetMethod(hash util.Uint160, operation string) (int
 	if err != nil {
 		return 0, err
 	}
-	err = getInvocationError(result)
+	err = GetInvocationError(result)
 	if err != nil {
 		return 0, fmt.Errorf("failed to invoke %s method of native contract %s: %w", operation, hash.StringLE(), err)
 	}
-	return topIntFromStack(result.Stack)
+	return TopIntFromStack(result.Stack)
 }
 
 // IsBlocked invokes `isBlocked` method on native Policy contract.
@@ -73,9 +73,9 @@ func (c *Client) IsBlocked(hash util.Uint160) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	err = getInvocationError(result)
+	err = GetInvocationError(result)
 	if err != nil {
 		return false, fmt.Errorf("failed to check if account is blocked: %w", err)
 	}
-	return topBoolFromStack(result.Stack)
+	return TopBoolFromStack(result.Stack)
 }

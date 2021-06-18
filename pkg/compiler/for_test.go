@@ -3,11 +3,16 @@ package compiler_test
 import (
 	"bytes"
 	"fmt"
+	"html/template"
+	"io/ioutil"
 	"math/big"
+	"os"
 	"strings"
 	"testing"
-	"text/template"
 
+	"github.com/nspcc-dev/neo-go/internal/random"
+	"github.com/nspcc-dev/neo-go/pkg/smartcontract"
+	"github.com/nspcc-dev/neo-go/pkg/util"
 	"github.com/nspcc-dev/neo-go/pkg/vm/stackitem"
 	"github.com/stretchr/testify/require"
 )
@@ -17,7 +22,10 @@ const srcTmpl = `package {{.PackageName}}
 import (
 	"github.com/nspcc-dev/neo-go/pkg/rpc/client"
 	"github.com/nspcc-dev/neo-go/pkg/smartcontract"
+	"github.com/nspcc-dev/neo-go/pkg/util"
 )
+
+var contractHash = {{ printf "%#v" .Hash }}
 
 // Client is a wrapper over RPC-client mirroring methods of smartcontract.
 type Client client.Client
@@ -25,14 +33,14 @@ type Client client.Client
 // {{.Name}} {{.Comment}}
 func (c *Client) {{.Name}}({{range $index, $arg := .Arguments -}}
 	{{- if ne $index 0}}, {{end}}
-	{{- .Name}} {{.Type}}
+	{{- .Name}} {{scTypeToGo .Type}}
 	{{- end}}) ({{ printf "%T" .Default}}, error) {
 	args := make([]smartcontract.Parameter, {{ len .Arguments }})
 	{{range $index, $arg := .Arguments -}}
-	args[{{$index}}] = smartcontract.NewParameter({{ scType $arg.Type }}, {{ scName $arg.Type $arg.Name }})
+	args[{{$index}}] = smartcontract.Parameter{Type: {{ scType $arg.Type }}, Value: {{ scName $arg.Type $arg.Name -}} }
 	{{end}}
-	result, err := (*client.Client)(c).InvokeFunction(
-		{{- lowerFirst .Name | printf "%q" }}, args)
+	result, err := (*client.Client)(c).InvokeFunction(contractHash, "
+		{{- lowerFirst .Name }}", args, nil)
 	if err != nil {
 		return {{.Default}}, err
 	}
@@ -44,32 +52,65 @@ func (c *Client) {{.Name}}({{range $index, $arg := .Arguments -}}
 
 	return client.TopIntFromStack(result.Stack)
 }
-{{end}}
-`
+{{end}}`
+
+func scType(s smartcontract.ParamType) string {
+	switch s {
+	case smartcontract.IntegerType:
+		return "smartcontract.IntegerType"
+	case smartcontract.Hash160Type:
+		return "smartcontract.Hash160Type"
+	default:
+		return "smartcontract.Any"
+	}
+}
+
+func scName(typ smartcontract.ParamType, name string) string {
+	switch typ {
+	case smartcontract.Hash160Type, smartcontract.Hash256Type:
+		return name + ".BytesBE()"
+	default:
+		return name
+	}
+}
+
+func scTypeToGo(typ smartcontract.ParamType) string {
+	switch typ {
+	case smartcontract.AnyType:
+		return "interface{}"
+	case smartcontract.BoolType:
+		return "bool"
+	case smartcontract.IntegerType:
+		return "int64"
+	case smartcontract.ByteArrayType:
+		return "[]byte"
+	case smartcontract.StringType:
+		return "string"
+	case smartcontract.Hash160Type:
+		return "util.Uint160"
+	case smartcontract.Hash256Type:
+		return "util.Uint256"
+	case smartcontract.SignatureType, smartcontract.PublicKeyType:
+		return "[]byte"
+	case smartcontract.ArrayType:
+		return "[]interface{}"
+	case smartcontract.MapType:
+		return "map[string]interface{}"
+	default:
+		panic("unexpected")
+	}
+}
 
 func Generate(arg interface{}) (string, error) {
 	fm := template.FuncMap{
 		"lowerFirst": func(s string) string {
+			fmt.Println("lowerFirst", s)
+			fmt.Println([]byte(strings.ToLower(s[0:1]) + s[1:]))
 			return strings.ToLower(s[0:1]) + s[1:]
 		},
-		"scType": func(s string) string {
-			switch s {
-			case "int":
-				return "smartcontract.IntegerType"
-			case "util.Uint160":
-				return "smartcontract.Hash160Type"
-			default:
-				return "smartcontract.Any"
-			}
-		},
-		"scName": func(typ, name string) string {
-			switch typ {
-			case "util.Uint160":
-				return name + ".BytesBE()"
-			default:
-				return name
-			}
-		},
+		"scType":     scType,
+		"scName":     scName,
+		"scTypeToGo": scTypeToGo,
 	}
 	tmp := template.New("test").Funcs(fm)
 	tmp, err := tmp.Parse(srcTmpl)
@@ -80,43 +121,47 @@ func Generate(arg interface{}) (string, error) {
 	if err := tmp.Execute(b, arg); err != nil {
 		return "", err
 	}
-	return b.String(), nil
+	return "", ioutil.WriteFile("./testdata/rpc.go", b.Bytes(), os.ModePerm)
+	//return b.String(), nil
 }
 
 type (
-	ctr struct {
+	contractTmpl struct {
 		PackageName string
-		Methods     []mtd
+		Hash        util.Uint160
+		Methods     []methodTmpl
 	}
 
-	mtd struct {
+	methodTmpl struct {
 		Name      string
 		Comment   string
-		Arguments []arg
+		Arguments []argTmpl
 		Return    string
 		Default   interface{}
 	}
 
-	arg struct {
-		Name, Type string
+	argTmpl struct {
+		Name string
+		Type smartcontract.ParamType
 	}
 )
 
 func TestCodeGen(t *testing.T) {
-	s, err := Generate(ctr{
-		PackageName: "mycontract",
-		Methods: []mtd{
+	s, err := Generate(contractTmpl{
+		PackageName: "testdata",
+		Hash:        random.Uint160(),
+		Methods: []methodTmpl{
 			{
 				Name:    "Transfer",
 				Comment: "returns one value.",
-				Arguments: []arg{
+				Arguments: []argTmpl{
 					{
 						Name: "to",
-						Type: "util.Uint160",
+						Type: smartcontract.Hash160Type,
 					},
 					{
 						Name: "amount",
-						Type: "int",
+						Type: smartcontract.IntegerType,
 					},
 				},
 				Default: false,

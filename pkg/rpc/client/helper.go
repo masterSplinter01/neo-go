@@ -11,8 +11,8 @@ import (
 	"github.com/nspcc-dev/neo-go/pkg/vm/stackitem"
 )
 
-// getInvocationError returns an error in case of bad VM state or empty stack.
-func getInvocationError(result *result.Invoke) error {
+// GetInvocationError returns an error in case of bad VM state or empty stack.
+func GetInvocationError(result *result.Invoke) error {
 	if result.State != "HALT" {
 		return fmt.Errorf("invocation failed: %s", result.FaultException)
 	}
@@ -22,8 +22,8 @@ func getInvocationError(result *result.Invoke) error {
 	return nil
 }
 
-// topBoolFromStack returns the top boolean value from stack.
-func topBoolFromStack(st []stackitem.Item) (bool, error) {
+// TopBoolFromStack returns the top boolean value from stack.
+func TopBoolFromStack(st []stackitem.Item) (bool, error) {
 	index := len(st) - 1 // top stack element is last in the array
 	result, ok := st[index].Value().(bool)
 	if !ok {
@@ -32,8 +32,8 @@ func topBoolFromStack(st []stackitem.Item) (bool, error) {
 	return result, nil
 }
 
-// topIntFromStack returns the top integer value from stack.
-func topIntFromStack(st []stackitem.Item) (int64, error) {
+// TopIntFromStack returns the top integer value from stack.
+func TopIntFromStack(st []stackitem.Item) (int64, error) {
 	index := len(st) - 1 // top stack element is last in the array
 	bi, err := st[index].TryInteger()
 	if err != nil {

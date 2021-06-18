@@ -822,7 +822,7 @@ func (c *Client) AddNetworkFee(tx *transaction.Transaction, extraFee int64, accs
 			if l := len(res.Stack); l != 1 {
 				return fmt.Errorf("result stack length should be equal to 1, got %d", l)
 			}
-			r, err := topIntFromStack(res.Stack)
+			r, err := TopIntFromStack(res.Stack)
 			if err != nil {
 				return fmt.Errorf("signer #%d: failed to get `verify` result from stack: %w", i, err)
 			}
