@@ -1,12 +1,131 @@
 package compiler_test
 
 import (
+	"bytes"
 	"fmt"
 	"math/big"
+	"strings"
 	"testing"
+	"text/template"
 
 	"github.com/nspcc-dev/neo-go/pkg/vm/stackitem"
+	"github.com/stretchr/testify/require"
 )
+
+const srcTmpl = `package {{.PackageName}}
+
+import (
+	"github.com/nspcc-dev/neo-go/pkg/rpc/client"
+	"github.com/nspcc-dev/neo-go/pkg/smartcontract"
+)
+
+// Client is a wrapper over RPC-client mirroring methods of smartcontract.
+type Client client.Client
+{{range $m := .Methods}}
+// {{.Name}} {{.Comment}}
+func (c *Client) {{.Name}}({{range $index, $arg := .Arguments -}}
+	{{- if ne $index 0}}, {{end}}
+	{{- .Name}} {{.Type}}
+	{{- end}}) ({{ printf "%T" .Default}}, error) {
+	args := make([]smartcontract.Parameter, {{ len .Arguments }})
+	{{range $index, $arg := .Arguments -}}
+	args[{{$index}}] = smartcontract.NewParameter({{ scType $arg.Type }}, {{ scName $arg.Type $arg.Name }})
+	{{end}}
+	result, err := (*client.Client)(c).InvokeFunction(
+		{{- lowerFirst .Name | printf "%q" }}, args)
+	if err != nil {
+		return {{.Default}}, err
+	}
+
+	err = getInvocationError(result)
+	if err != nil {
+		return {{.Default}}, err
+	}
+
+	return client.TopIntFromStack(result.Stack)
+}
+{{end}}
+`
+
+func Generate(arg interface{}) (string, error) {
+	fm := template.FuncMap{
+		"lowerFirst": func(s string) string {
+			return strings.ToLower(s[0:1]) + s[1:]
+		},
+		"scType": func(s string) string {
+			switch s {
+			case "int":
+				return "smartcontract.IntegerType"
+			case "util.Uint160":
+				return "smartcontract.Hash160Type"
+			default:
+				return "smartcontract.Any"
+			}
+		},
+		"scName": func(typ, name string) string {
+			switch typ {
+			case "util.Uint160":
+				return name + ".BytesBE()"
+			default:
+				return name
+			}
+		},
+	}
+	tmp := template.New("test").Funcs(fm)
+	tmp, err := tmp.Parse(srcTmpl)
+	if err != nil {
+		return "", err
+	}
+	b := bytes.NewBuffer(nil)
+	if err := tmp.Execute(b, arg); err != nil {
+		return "", err
+	}
+	return b.String(), nil
+}
+
+type (
+	ctr struct {
+		PackageName string
+		Methods     []mtd
+	}
+
+	mtd struct {
+		Name      string
+		Comment   string
+		Arguments []arg
+		Return    string
+		Default   interface{}
+	}
+
+	arg struct {
+		Name, Type string
+	}
+)
+
+func TestCodeGen(t *testing.T) {
+	s, err := Generate(ctr{
+		PackageName: "mycontract",
+		Methods: []mtd{
+			{
+				Name:    "Transfer",
+				Comment: "returns one value.",
+				Arguments: []arg{
+					{
+						Name: "to",
+						Type: "util.Uint160",
+					},
+					{
+						Name: "amount",
+						Type: "int",
+					},
+				},
+				Default: false,
+			},
+		},
+	})
+	require.NoError(t, err)
+	fmt.Println(s)
+}
 
 func TestEntryPointWithMethod(t *testing.T) {
 	src := `
